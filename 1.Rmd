@@ -1,0 +1,264 @@
+---
+title: "model"
+author: "Jianhaoyan"
+date: "11/28/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r}
+library(dplyr)
+library(ggplot2)
+data_train<-read.csv("application_train.csv")
+bureau<-read.csv("bureau.csv")
+data_1<-inner_join(data_train,bureau,by="SK_ID_CURR")
+##look at missing value
+missing_data<-as.data.frame(sort(sapply(data_1, function(x)sum(is.na(x)))))
+colnames(missing_data)[1]="count"
+missing_data$features <- rownames(missing_data)
+ggplot(missing_data)+
+  geom_bar(mapping = aes(x=features,y=count),stat = "identity")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none") + ylab("Percentage of missingvalues") +
+  xlab("Feature") + ggtitle("Understanding Missing Data")
+dbraw<-missing_data%>%
+  filter(count<300000)
+column1<-as.matrix(dbraw$features)
+data_raw<-as.data.frame(data_1[,column1])
+```
+
+#using brotua extracting features.
+```{r}
+#using brotua extracting features.
+data_model_raw<-data_raw[,c("SK_ID_CURR","TARGET",
+                            "CODE_GENDER","AMT_INCOME_TOTAL",
+                            "AMT_CREDIT","AMT_ANNUITY.x",
+                            "NAME_INCOME_TYPE","AMT_GOODS_PRICE",
+                            "DAYS_EMPLOYED","EXT_SOURCE_3",
+                            "EXT_SOURCE_2","OCCUPATION_TYPE",
+                            "DAYS_REGISTRATION","DAYS_BIRTH",
+                            "FLAG_OWN_CAR","FLAG_MOBIL","DAYS_ID_PUBLISH")]
+#exit source is important, I choose to fill the missing data of ext_source
+data_model_raw$EXT_SOURCE_2[is.na(data_model_raw$EXT_SOURCE_2)]<-"0"
+data_model_raw$EXT_SOURCE_3[is.na(data_model_raw$EXT_SOURCE_3)]<-"0"
+#
+db_model_raw<-na.omit(data_model_raw)
+db_model<-db_model_raw%>%
+  group_by(OCCUPATION_TYPE)%>%
+  summarise(average_income=mean(AMT_INCOME_TOTAL))
+db_try<-left_join(db_model_raw,db_model,by="OCCUPATION_TYPE")
+db_try<-db_try[,-4]
+```
+
+
+
+
+#looking at skewness
+```{r}
+library(ggplot2)
+library(RPMG)
+library(e1071)
+library(DT)
+library(data.table)
+library(dplyr)
+library(gridExtra)
+doPlots <- function(data_in, fun, ii, ncol=3) {
+  pp <- list()
+  for (i in ii) {
+    p <- fun(data_in=data_in, i=i)
+    pp <- c(pp, list(p))
+  }
+  do.call("grid.arrange", c(pp, ncol=ncol))
+}
+
+plotHist <- function(data_in, i) {
+  data <- data.frame(x=data_in[[i]])
+  p <- ggplot(data=data, aes(x=x)) + geom_histogram(bins=100, fill="#0072B2", alpha = .9) + xlab(colnames(data_in)[i]) + theme_light() + 
+    theme(axis.text.x = element_text(angle = 90, hjust =1))
+  return (p)
+}
+#
+doPlots(dt1_num, plotHist, ii = 1:11)
+#
+numeric_list <- unlist(lapply(db_try, is.numeric))
+dt1_num <- setDT(db_try)[,..numeric_list]
+skewValues <- as.data.frame(apply(dt1_num, 2, function(x) skewness(x, na.rm = TRUE)))
+colnames(skewValues)[1] <- "skew_values"
+#skewValues <- index_to_col(skewValues,'Column')
+skewValues <- setDT(skewValues)[order (skew_values, decreasing = TRUE)]
+skewValues[sample(1:nrow(skewValues), size = nrow(skewValues)),] %>% 
+  datatable(filter = 'top', options = list(
+    pageLength = 15, autoWidth = F
+  ))
+##We can find that "AMT_ANNUITY.x","AMT_GOODS_PRICE","DAYS_REGISTRACTION" have serious skwness problems, so we need to transform them.
+
+
+```
+
+##model
+#AMT_CREDIT
+```{r}
+hist(db_try$AMT_CREDIT)
+#It has lots of skewness.
+db_try$AMT_CREDIT<-log(db_try$AMT_CREDIT)
+hist(db_try$AMT_CREDIT)
+#It seems to become much better than before.
+#outlier
+boxplot(db_try$AMT_CREDIT)
+#remove outlier
+x <- db_try$AMT_CREDIT
+qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+H <- 1.5 * IQR(x, na.rm = T)
+print(qnt)
+print(caps)
+print(H)
+db_try$AMT_CREDIT[db_try$AMT_CREDIT < (qnt[1] - H)] <- caps[1]
+db_try$AMT_CREDIT[db_try$AMT_CREDIT > (qnt[2] + H)] <- caps[2]
+boxplot(db_try$AMT_CREDIT)
+```
+#AMT_ANNUITY.x
+```{r}
+hist(db_try$AMT_ANNUITY.x)
+#It has serious skewness issue.
+db_try$AMT_ANNUITY.x<-log(db_try$AMT_ANNUITY.x)
+hist(db_try$AMT_ANNUITY.x)
+#Outliers
+boxplot(db_try$AMT_ANNUITY.x)
+x <- db_try$AMT_ANNUITY.x
+qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+H <- 1.5 * IQR(x, na.rm = T)
+print(qnt)
+print(caps)
+print(H)
+db_try$AMT_ANNUITY.x[db_try$AMT_ANNUITY.x < (qnt[1] - H)] <- caps[1]
+db_try$AMT_ANNUITY.x[db_try$AMT_ANNUITY.x > (qnt[2] + H)] <- caps[2]
+boxplot(db_try$AMT_ANNUITY.x)
+```
+#AMT_GOODS_PRICE
+```{r}
+#Skewness
+hist(db_try$AMT_GOODS_PRICE)
+#It has serious skewness problem.
+db_try$AMT_GOODS_PRICE<-log(db_try$AMT_GOODS_PRICE)
+hist(db_try$AMT_GOODS_PRICE)
+#Outlier
+boxplot(db_try$AMT_GOODS_PRICE)
+x <- db_try$AMT_GOODS_PRICE
+qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+H <- 1.5 * IQR(x, na.rm = T)
+print(qnt)
+print(caps)
+print(H)
+db_try$AMT_GOODS_PRICE[db_try$AMT_GOODS_PRICE < (qnt[1] - H)] <- caps[1]
+db_try$AMT_GOODS_PRICE[db_try$AMT_GOODS_PRICE > (qnt[2] + H)] <- caps[2]
+boxplot(db_try$AMT_GOODS_PRICE)
+```
+
+#Days_Employed
+```{r}
+db_try$DAYS_EMPLOYED<-abs(db_try$DAYS_EMPLOYED)
+#Skewness
+db_try$DAYS_EMPLOYED<-log(db_try$DAYS_EMPLOYED)
+hist(db_try$DAYS_EMPLOYED)
+#Outliers
+boxplot(db_try$DAYS_EMPLOYED)
+x <- db_try$DAYS_EMPLOYED
+qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+H <- 1.5 * IQR(x, na.rm = T)
+print(qnt)
+print(caps)
+print(H)
+db_try$DAYS_EMPLOYED[db_try$DAYS_EMPLOYED < (qnt[1] - H)] <- caps[1]
+db_try$DAYS_EMPLOYED[db_try$DAYS_EMPLOYED > (qnt[2] + H)] <- caps[2]
+boxplot(db_try$DAYS_EMPLOYED)
+```
+
+#DAYS_REGESTION
+
+```{r}
+db_try$DAYS_REGISTRATION<-abs(db_try$DAYS_REGISTRATION)
+#Skewness
+hist(db_try$DAYS_REGISTRATION)
+#Outliers
+boxplot(db_try$DAYS_REGISTRATION)
+x <- db_try$DAYS_REGISTRATION
+qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+H <- 1.5 * IQR(x, na.rm = T)
+print(qnt)
+print(caps)
+print(H)
+db_try$DAYS_REGISTRATION[db_try$DAYS_REGISTRATION < (qnt[1] - H)] <- caps[1]
+db_try$DAYS_REGISTRATION[db_try$DAYS_REGISTRATION > (qnt[2] + H)] <- caps[2]
+boxplot(db_try$DAYS_REGISTRATION)
+```
+
+#DAYS_BIRTH
+```{r}
+db_try$DAYS_BIRTH<-abs(db_try$DAYS_BIRTH)
+#Skewness
+hist(db_try$DAYS_REGISTRATION)
+#Outliers
+boxplot(db_try$DAYS_BIRTH)
+x <- db_try$DAYS_BIRTH
+qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+H <- 1.5 * IQR(x, na.rm = T)
+print(qnt)
+print(caps)
+print(H)
+db_try$DAYS_BIRTH[db_try$DAYS_BIRTH < (qnt[1] - H)] <- caps[1]
+db_try$DAYS_BIRTH[db_try$DAYS_BIRTH > (qnt[2] + H)] <- caps[2]
+boxplot(db_try$DAYS_BIRTH)
+```
+
+
+
+```{r}
+db_try$TARGET<-as.factor(db_try$TARGET)
+db_try$EXT_SOURCE_3<as.numeric(db_try$EXT_SOURCE_3)
+db_try$EXT_SOURCE_2<-as.numeric(db_try$EXT_SOURCE_2)
+db_test$TARGET<-as.factor(db_try$TARGET)
+#sample
+library(sampling)
+library(caret)
+trainIndex <- createDataPartition(db_try$OCCUPATION_TYPE, p = .5, list = FALSE, times = 1)
+db_train <- db_try[ trainIndex,]
+db_test<-db_try[-trainIndex]
+#
+
+
+
+#fill blank
+library(lme4)
+m1<-glmer(factor(TARGET)~factor(CODE_GENDER)+AMT_CREDIT+AMT_GOODS_PRICE+
+            average_income+factor(FLAG_OWN_CAR)+DAYS_BIRTH+
+            DAYS_EMPLOYED+EXT_SOURCE_2+
+            (1|OCCUPATION_TYPE),
+          data = db_train,family=binomial("logit"))
+summary(m1)
+
+vcov(m1) 
+#
+db_test$OCCUPATION_TYPE<-as.factor(db_test$OCCUPATION_TYPE)
+m3.predict <- predict(m1, db_test,type="response")
+m3.predict <- ifelse(m3.predict > 0.5,1,0)
+head(m3.predict)
+m3.predict <- as.factor(m3.predict)
+compare <- data.frame(obs = db_test$TARGET, pred = m3.predict)
+confusionMatrix(m3.predict, db_test$TARGET)
+```
+###Some thoughts.
+My intial multilevel logistic regression model fits really bad. The accuracy of this model tells me that this model is just messy. I want to predict the probability of people that can not pay back money on time. But my model almost classifies all of clients as people pay back money on time.
+I think the reason is that my data is seriously biased because my reposinve variable "TARGET" only has 8% of 1. So maybe I need to try another model. So can you give me some advice? Thank you professor.
+#:) :) :) :) :) :) :) :) :) :) :) :) :) :) :) :) :) :) :) :) :) :) :) 
+
+

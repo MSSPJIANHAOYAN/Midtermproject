@@ -1,0 +1,258 @@
+---
+title: "678 midterm project"
+author: "Jianhaoyan"
+date: "11/12/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Input Data and library packages
+```{r}
+data_train<-read.csv("application_train.csv")
+bureau<-read.csv("bureau.csv")
+bureau_balance<-read.csv("bureau_balance.csv")
+previous_data<-read.csv("previous_application.csv")
+creditcard_balance<-read.csv("credit_card_balance.csv")
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, skimr, GGally, plotly, viridis, 
+               caret, DT, data.table)
+library(dplyr)
+
+```
+
+
+#Introduction
+
+In this project, I am asked to predict the TARGET variable (Clients’ repayment abilities) There are a number of datasets which are provided but for the purpose of simplicity the application dataset will be used.
+The data is provided by the company called Home Credit, and they want to 
+
+##EDA Part
+
+In this part, we will use EDA to have an overview of our data.
+
+#Target
+
+The variables "Target" represents whether the clients have difficulties to reimburse the credits. 
+"0" means that clents can reimburse on time while "1" means that clients have difficulties to reimburese.
+```{r}
+TotalNoofRows = nrow(data_train)
+
+data_train %>%
+  group_by(TARGET) %>%
+  summarise(Count = n()/TotalNoofRows*100) %>%
+  arrange(desc(Count)) %>%
+  ungroup() %>%
+  mutate(TARGET = reorder(TARGET,Count)) %>%
+  
+  ggplot(aes(x = TARGET,y = Count)) +
+  geom_bar(stat='identity') +
+  geom_text(aes(x = TARGET, y = 1, label = paste0("( ",round(Count,2)," %)",sep="")),
+            hjust=0, vjust=.5, size = 4, colour = 'white',
+            fontface = 'bold') +
+  labs(x = 'TARGET', 
+       y = 'Percentage', 
+       title = 'TARGET distribution') +
+  coord_flip() +
+  theme_bw()
+  
+```
+
+#AMI_CREDIT
+
+This variable represents hoe much money the clients have borrowed.
+```{r}
+summary(data_train$AMT_CREDIT)
+ggplot(data = data_train)+
+  geom_histogram(aes(x=AMT_CREDIT))+
+  labs(x= 'AMT_CREDIT',y = 'Count', title = paste('Distribution of', 'AMT_CREDIT')) 
+
+  
+```
+
+#AMT_Total
+
+This variable represents how much income each application earend per year.
+```{r}
+data_train%>%
+  filter(AMT_INCOME_TOTAL<200000)%>%
+  ggplot()+
+  geom_histogram(aes(x=AMT_INCOME_TOTAL),bins = 20)+
+  labs(aes(x='AMT-INCOME-TOTAL',y='Count',
+           title='Distribution of AMT_INCOME_TOTAL'))+
+  scale_x_continuous() +
+  scale_y_continuous() +
+  theme_bw()
+```
+#AMT_ANNUITY
+
+This variable means how much money the clients need to repay per year.
+```{r}
+data_train%>%
+  filter(AMT_ANNUITY< 100000)%>%
+  ggplot(aes(x=AMT_ANNUITY))+
+  geom_histogram(bins = 30)+
+  labs(aes(x='AMT_ANNUITY',
+           y='Count',
+       title='Distribution of AMT_ANNUITY'))
+```
+
+#Name_Income_Type
+
+This variable informs us whta kinds of jobs that clients do when they apply the credit.
+```{r}
+data_train%>%
+  group_by(NAME_INCOME_TYPE,TARGET)%>%
+  summarise(Count=n())%>%
+  ggplot(aes(x=NAME_INCOME_TYPE,y=Count,fill=TARGET))+
+  geom_bar(stat = 'identity',position = position_dodge(width = 1))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))+
+  labs(aes(x='NAME_INCOME_TYPE',
+           y='Count',
+           title="Distributions of NAME_INCOME_TYPE"))
+```
+#Name_Occupation_Type
+This variable tells us what the jobs of the clients do.
+```{r}
+data_train%>%
+  group_by(TARGET,OCCUPATION_TYPE)%>%
+  summarise(Count=n())%>%
+  ungroup()%>%
+  mutate(OCCUPATION_TYPE=reorder(OCCUPATION_TYPE,Count))%>%
+  mutate(TARGET = as.factor(TARGET)) %>%
+  ggplot(aes(x=OCCUPATION_TYPE,y=Count,fill=TARGET))+
+  geom_bar(stat="identity",position = position_dodge(width = 1))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))+
+  labs(aes(x='OCCUPATION_TYPE',
+           y='Count',
+           title='Distribution of Occupation'))
+```
+
+#Name_Education_Type
+
+This variable illustrate the education level of clients
+```{r}
+data_train%>%
+  filter(!is.na(NAME_EDUCATION_TYPE))%>%
+  group_by(NAME_EDUCATION_TYPE,TARGET)%>%
+  summarise(count=n())%>%
+  ungroup()%>%
+  mutate(NAME_EDUCATION_TYPE=reorder(NAME_EDUCATION_TYPE,count))%>%
+  mutate(TARGET=factor(TARGET))%>%
+  ggplot(aes(x=NAME_EDUCATION_TYPE,y=count,fill=TARGET))+
+  geom_bar(stat="identity",position = position_dodge(width = 1))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))+
+  labs(aes(x='Education_type',
+           y='Count',
+           title='Distribution of Education Level'))
+
+```
+#Name_Family_Status
+
+This varibale mainly tells us that what's the family situation of client.
+```{r}
+data_pie1<-data_train%>%
+  group_by(NAME_FAMILY_STATUS)%>%
+  summarise(count=n())
+pie(data_pie1$count,labels = data_pie1$NAME_FAMILY_STATUS,radius = 0.8)
+  
+```
+#
+```{r}
+graph <- list()
+
+for (i in 1:21){
+
+    graph[[i]] <- data_train[, sapply(data_train, is.numeric)] %>% 
+      na.omit() %>%
+        select(TARGET,((i-1)*5+1):((i-1)*5+5)) %>%
+        mutate(TARGET = factor(TARGET)) %>%
+        ggpairs(aes(col = TARGET, alpha=.4))
+    
+    print(graph[[i]])
+}
+```
+#We should join tables 
+```{r}
+
+data_1<-left_join(data_train,bureau,by="SK_ID_CURR")
+living_status<-data_1[,45:91]%>%
+  mutate(data_1$SK_ID_CURR)
+##Then I want to cluster the housing condition. However, beacuse our data is so big, so we should randomly select 1000000 data.
+db_try1<-sample(db_try$SK_ID_CURR,1000000)
+db_try1<-data.frame(db_try1)
+names(db_try1)[names(db_try1)=="living_status1"]="SK_ID_CURR"
+db_try1$SK_ID_CURR<-factor(db_try1$SK_ID_CURR)
+db_try1$SK_ID_CURR<-factor(db_try1$SK_ID_CURR)
+db_samplesample<-
+  dplyr::inner_join(db_try,db_try1,by="SK_ID_CURR") 
+```
+##Cluster
+
+```{r}
+setwd("/user4/mssphw1/ryanyan/Midtermroject")
+```
+
+
+```{r}
+#library(Boruta)
+#library(mlbench)
+#library(dimRed)
+#library(caret)
+##Load dataset
+#data_all[is.na(data_all)] <- 0
+
+##prepare traing scheme
+#control<-trainControl(method = "repeatedcv",number=10,repeats = 3)
+##rain the model
+#model<-train(TARGET~.,data = data_all,method="lvq",
+             #preProcess="scale",trControl=control)
+##estimate importance
+#importance <- varImp(model, scale=FALSE)
+##summarsie importance
+
+```
+
+
+
+
+##Because my dataset is too big, I choose to randomly select 
+```{r}
+save(train,file="data_train.RData")
+
+
+```
+
+##model fit
+
+#merge table
+```{r}
+library(ggplot2)
+library(dplyr)
+data_raw<-inner_join(data_1,bureau_balance,by="SK_ID_BUREAU")
+##look at all of the missing value
+missing_data<-as.data.frame(sort(sapply(data_raw, function(x)sum(is.na(x)))))
+colnames(missing_data)[1]="variable"
+colnames(missing_data)[2]="count"
+
+
+ggplot(missing_data)+
+  geom_bar(mapping = aes(x=features,y=count),stat = "identity")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none") + ylab("Percentage of missingvalues") +
+  xlab("Feature") + ggtitle("Understanding Missing Data")
+##we can find their are some variables having tons of missing data, so 
+column<-c()
+dbraw<-missing_data%>%
+  filter(count<300000)
+column<-as.data.frame(dbraw$features)
+data_raw<-as.data.frame(data_raw)
+  
+dim(column)
+dim(data_raw)
+##dealing with skewness
+data_raw<-na.omit(data.raw)
+```
+
