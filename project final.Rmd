@@ -1,0 +1,539 @@
+---
+title: "MA678 mid-term project report"
+author: "Jianhaoyan"
+date: "12/2/2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#1. Abstract
+
+MA678 mid-term project is a great chance to combine what I have learned in class with my career goals. I dream to seek for a job in financial industry, so my topic is about credit card which accounts for great proportions of banks' profits.
+This project focuses on how to predict the probability of credit cards clients not paying back money on time. 
+The data comes from Kaggle provided by "HOME CREDIT COMPANY." 
+
+#2. Introduction
+
+## 2.1 Background
+
+Nowadays, credit cards are crucial to both banks and costumes.
+Credit cards give costumers good shopping experiences and bring enormous profits to banks. 
+However, the extensive use of credit cards brings the considerable credit default risk to financial companies. So fitting the reliable models to predict the probability of credit default behavior happening in each client is essential. As we all know, mass credit card defaults can cause a financial crisis. So fitting a good model can also be crucial to the government to protect their finance from the crisis. 
+
+
+## 2.2 Data and packages preparation
+```{r,echo=FALSE,warning=FALSE,include=FALSE}
+library(plyr)
+library(coefplot)
+library(dplyr)
+library(data.table)
+library(readxl)
+library(reshape2)
+library(stringr)
+library(stringi)
+library(ggplot2)
+library(tidyverse)
+library(gridExtra)
+library(matrixStats)
+library(lubridate)
+library(corrplot)
+library(e1071)
+library(xgboost)
+library(caret)
+library(zoo)
+library(factoextra)
+library(plotly)
+library(DT)
+library(RColorBrewer)
+load("data_train.RData")
+# load.libraries <- c('plyr', 'dplyr','data.table', 'readxl', 'reshape2', 'stringr', 'stringi', 'ggplot2', 'tidyverse', 'gridExtra','matrixStats','lubridate','corrplot','e1071','xgboost','caret','zoo','factoextra','plotly','DT')
+# install.lib <- load.libraries[!load.libraries %in% installed.packages()]
+# for(libs in install.lib) install.packages(libs, dependences = TRUE)
+# sapply(load.libraries, require, character = TRUE)
+```
+
+Our data is messy. It has 122 variables and  307511 observations. Moreover, we can see our data has different kind of classes. 
+What's more, missing data is common in our dataset. So it requires me to do data cleaning carefully before fitting the model. The responsive variable of my model is TARGET in which "0" means the client is paying back money on time while "1" means not.
+
+
+#3. EDA 
+
+In this part, we use EDA to have an overview of our data. Meanwhile, I would do some cleaning for my data. 
+The EDA is the process of exploring data where we can find the important information.The main goal of this part is to have an initial understadings of what are the relationships between different variables
+
+
+##3.1 Target Distribution
+Target is the most important variable in my data. So I should know the distribution of this variable.
+
+```{r,echo=FALSE}
+TotalNoofRows = nrow(data_train)
+
+data_train %>%
+  group_by(TARGET) %>%
+  summarise(Count = n()/TotalNoofRows*100) %>%
+  arrange(desc(Count)) %>%
+  ungroup() %>%
+  mutate(TARGET = reorder(TARGET,Count)) %>%
+  
+  ggplot(aes(x = TARGET,y = Count)) +
+  geom_bar(stat='identity',fill=brewer.pal(7, "Set2")[4], width = 0.6) +
+  geom_text(aes(x = TARGET, y = 1, label = paste0("( ",round(Count,2)," %)",sep="")),
+            hjust=0, vjust=.5, size = 4, colour = 'white',
+            fontface = 'bold') +
+  labs(x = 'TARGET', 
+       y = 'Percentage', 
+       title = 'Figure1 TARGET distribution') +
+  coord_flip() +
+  theme_bw()
+```
+
+From Figure 1, we can find that "0"  takes really small proportions of the data which means ony few clients not paying back money on time. Besides, this plot tells me that my data has serious biased problems that needs me to handle.
+
+
+##3.2 Target VS NAME_CONTRACT_TYPE
+```{r,echo=FALSE}
+contract<-data_train%>%
+  group_by(NAME_CONTRACT_TYPE,TARGET) %>%
+  summarise(count=n()) %>%
+  mutate(all_count=sum(count)) %>%
+  mutate(p=count/all_count)
+
+ggplot(contract) +
+  geom_bar(aes(x=NAME_CONTRACT_TYPE,
+               y=p,fill=as.factor(TARGET)),stat="Identity")+
+  labs(title="Figure2 Contract") +
+  theme(axis.text.x = element_text(angle=60,vjust=0.5))
+
+
+```
+
+Figure 2 is about relationships between different contract types and TARGET. It is evident that TARGET 0 accounts for most of the parts of both two contract types which also implies me that my data is biased.
+Besides, we can find that the 0 accounts for much more probabilities in cash loans than revolving loans. So it tells us cash loans bring higher credit card default risk to banks than revolving loans.
+
+##3.3 Target VS Occupation type
+```{r,echo=FALSE}
+data_train%>%
+  group_by(TARGET,OCCUPATION_TYPE)%>%
+  summarise(Count=n())%>%
+  ungroup()%>%
+  mutate(OCCUPATION_TYPE=reorder(OCCUPATION_TYPE,Count))%>%
+  mutate(TARGET = as.factor(TARGET)) %>%
+  ggplot(aes(x=OCCUPATION_TYPE,y=Count,fill=TARGET))+
+  geom_bar(stat="identity",position = position_dodge(width = 1))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))+
+  labs(aes(x='OCCUPATION_TYPE',
+           y='Count',
+           title='Figure3 Distribution of Occupation'))
+
+jobs<-data_train%>%
+  group_by(OCCUPATION_TYPE,TARGET) %>%
+  summarise(count=n()) %>%
+  mutate(all_count=sum(count)) %>%
+  mutate(p=count/all_count)
+
+ggplot(jobs) +
+  geom_bar(aes(x=OCCUPATION_TYPE,
+               y=p,fill=as.factor(TARGET)),stat="Identity")+
+  labs(title="Figure4 Occupations") +
+  theme(axis.text.x = element_text(angle=60,vjust=0.5))
+
+```
+
+Figure3 is about Target and the occupation type. We can find the labors account for most of our clients, and labors have the most people that can not pay back money on time. 
+
+Figure4 tells us that labors may be much easier to fail to pay back money on time than other occupations. The relationship between occupations and target is obvious so that this variable can be a good predictor.
+
+
+##3.4 CAR VS Income
+```{r,echo=FALSE}
+car<-data_train%>%
+  group_by(FLAG_OWN_CAR,TARGET) %>%
+  summarise(count=n()) %>%
+  mutate(all_count=sum(count)) %>%
+  mutate(p=count/all_count)
+
+ggplot(car) +
+  geom_bar(aes(x=FLAG_OWN_CAR,
+               y=p,fill=as.factor(TARGET)),stat="Identity")+
+  labs(title="Figure5 CAR") +
+  theme(axis.text.x = element_text(angle=60,vjust=0.5))
+```
+
+From this plot, we can find that it seems like that people without cars have larger probabilities paying back money delay than people with cars.
+But the difference between these two groups is slight, so the influences on TARGET brought by cars is not very obvious.
+
+##3.5 Target VS DAYS_ID_PUBLISHED
+Because the DAYS_ID_PUBLISHED is negative data, so firstly I should transform the negative data to positive data.
+```{r,echo=FALSE}
+data_train$DAYS_ID_PUBLISH<-abs(data_train$DAYS_ID_PUBLISH)
+ggplot(data = data_train)+
+  aes(x=factor(TARGET),y=DAYS_ID_PUBLISH)+
+  geom_boxplot(fill= brewer.pal(7, "Set3")[4], width = 0.6)+
+  labs(title="Figure6")
+```
+
+From this plot, we can find that people paying back money on time have much longer DAYS_ID_PUBLISHED time than people cannot. And boxplot also tells me that this variable does not many outliers. 
+
+##3.6 AMI_CREDIT VS TARGET
+```{r,echo=FALSE}
+summary(data_train$AMT_CREDIT)
+ggplot(data = data_train)+
+  geom_histogram(aes(x=AMT_CREDIT),fill= brewer.pal(7, "Set3")[4])+
+  labs(x= 'AMT_CREDIT',y = 'Count', title = paste('Figure7','Distribution of', 'AMT_CREDIT'))
+
+ggplot(data = data_train)+
+  geom_boxplot(aes(x=OCCUPATION_TYPE, y=AMT_CREDIT,fill=OCCUPATION_TYPE))+
+  labs(x="OCCUPATION_TYPE",
+       y="AMT_CREDIT",
+       title="Figure8")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+Figure7 is the distribution of AMT_CREDIT. This variable means how much money clients borrow from the bank. We can see that the AMT_CREDIT has apparent skewness which needs me to handle.
+
+Figure8 tells me that the AMT_CREDIT has many outliers, so we should process this data to fit our model. And we can also know that the "manager" has the most higher average AMT_CREDIT than any other occupations. 
+
+##3.7 Days of birth
+```{r,echo=FALSE}
+data_train$DAYS_BIRTH<-abs(data_train$DAYS_BIRTH)
+ggplot(data = data_train)+
+  aes(x=factor(TARGET),y=DAYS_BIRTH,fill=TARGET)+
+  geom_boxplot()+
+  labs(x="TARGET",
+       y="DAYS_BIRTH",
+       title="Figure 9")
+
+```
+
+DAYS_BIRTH is just the age of the client. From figure 8, we can find that clients are paying back money on time have more massive average days of birth than those cannot. 
+
+##3.8 EXT_SOURCE VS TARGET
+```{r,echo=FALSE, warning=FALSE}
+ggplot(data = data_train)+
+  aes(x=factor(TARGET),y=EXT_SOURCE_1)+
+  geom_boxplot(fill=brewer.pal(7, "Set1")[1])+
+  labs(title="Figure10 EXT_SOURCE_1")
+
+ggplot(data = data_train)+
+  aes(x=factor(TARGET),y=EXT_SOURCE_2)+
+  geom_boxplot(fill=brewer.pal(7, "Set1")[2])+
+  labs(title="Figure11 EXT_SOURCE_2")
+
+ggplot(data = data_train)+
+  aes(x=factor(TARGET),y=EXT_SOURCE_3)+
+  geom_boxplot(fill=brewer.pal(7, "Set1")[3])+
+  labs(title="Figure12 EXT_SOURCE_3")
+
+```
+
+EXT_COURCE is the extra credit scores of clients. 
+
+It is evident that the extra credit scores have positive effects on the probability of clients paying back money on time. So the EXT_SOURCE_1, EXT_SOURCE_2, and EXT_SOURCE_3 are important variables that can help me to fit the model.
+
+##3.9 Family Status
+```{r,echo=FALSE}
+data_pie1<-data_train%>%
+  group_by(NAME_FAMILY_STATUS)%>%
+  summarise(count=n())
+pie(data_pie1$count,labels = data_pie1$NAME_FAMILY_STATUS,radius = 0.8)
+```
+
+From this pie chart, we can find most of our clients are married.
+
+
+
+
+#4. Discussion
+The purpose of my model is to predict the probability of failing to pay back money on time with given information about our clients. Because my responsive variable is 0 and 1, the logistic model is the first thing I think that may be suitable for my problem. However, I still need more models to compare with the logistic model to find the most suitable model.
+So I plan to fit three kinds of models.
+-Logistic model
+-Multilevel logistic model
+
+
+
+##4.1 Preprocessing data
+
+From the EDA part, we can find that our data is messy. Firstly, there are lots of missing data existing. Secondly, this data is imbalanced and biased. In the responsive variable "TARGET", "0" accounts for 92%, while "1" only contains 8% of data. This characteristic of data can affect the accuracy of our model seriously. So we need to do the preprocessing containing dealing with missing data, addressing skewness problems and imbalance.
+
+###4.1.1 Extracting Features.
+
+Because of too many variables, the extraction of features is essential. 
+I use "baruta" to do this extraction. Because the calculation is enormous, I run this package in SCC2, so right now, I only use the outcome to set my data for the model.
+```{r,echo=FALSE}
+data_1 <- 
+  data_train[,c("DAYS_ID_PUBLISH", "FLAG_OWN_CAR","OCCUPATION_TYPE",
+                "SK_ID_CURR","REG_CITY_NOT_LIVE_CITY",
+                "YEARS_BEGINEXPLUATATION_MODE","COMMONAREA_MODE",
+                "FLOORSMAX_MODE","LIVINGAPARTMENTS_MODE",
+                "YEARS_BUILD_MEDI","CODE_GENDER",
+                "AMT_INCOME_TOTAL","TARGET","EXT_SOURCE_1",
+                "EXT_SOURCE_2","EXT_SOURCE_3","AMT_CREDIT","AMT_GOODS_PRICE")]
+data_1$AMT_CREDIT<-abs(data_1$AMT_CREDIT)
+data_1$AMT_GOODS_PRICE<-abs(data_1$AMT_GOODS_PRICE)
+
+```
+
+### 4.1.2 Missing Data
+
+For the factor and categorical variable, I choose to omit missing data.
+For the numeric variable, I choose to use mean to fill the missing data.
+```{r,echo=FALSE}
+numeric_list1 <- unlist(lapply(data_1, is.numeric))
+dt1_num <- setDT(data_1)[,..numeric_list1]
+dt1_num<-dt1_num[,-c("TARGET")]
+dt1_no_num<-data_1[,c("SK_ID_CURR","CODE_GENDER",
+                      "FLAG_OWN_CAR","OCCUPATION_TYPE","TARGET")]
+dt1_num1<-na.aggregate(dt1_num)
+dt1<-inner_join(dt1_no_num,dt1_num1,by="SK_ID_CURR")
+dt1<-na.omit(dt1)
+```
+
+### 4.1.3 Skewness and outliers
+
+From the EDA part, we find that the numeric data has skewness which brings a difficulty to fit the model. So in this part, I will do some transformations.
+```{r,echo=FALSE}
+dt1_num2<-dt1[,-c(2,3,4,5,7)]
+dt1_no_num2<-dt1[,c(2,3,4,5,7)]
+preProcValues <- preProcess(dt1_num2, method = "BoxCox")
+preProcValues
+dt1_tran <- predict(preProcValues, dt1_num2)
+db_model_raw<-cbind(dt1_tran,dt1_no_num2)
+
+
+db_model<-db_model_raw%>%
+  group_by(OCCUPATION_TYPE)%>%
+  summarise(average_income=mean(AMT_INCOME_TOTAL))
+db_try<-left_join(db_model_raw,db_model,by="OCCUPATION_TYPE")
+db_try<-db_try[,-c(1,7)]
+
+
+```
+
+
+### 4.1.4 Resample
+
+From the EDA part, we can find that my responsive variable "TARGET" has serious unbalance problem. The "1" accounts for 92 percent while "0" only accounts for 8 percent. 
+I should acknowledge firstly I use the data without resampling to fit the model. Unfortunately, the model fails to converge. The biased data brings great difficulties to fit the good model. So this triggers me to resample the data. There are many ways to do that. We can oversample, undersample or "SMOTE". In this project, I choose to use undersample because it can also decrease the size of my data which can decrease the calculation time when I fit the model.
+I use "ROSE" package to resample our data in order to address the unbalanced issues of our data.
+```{r,echo=FALSE}
+library(ROSE)
+library(sampling)
+library(caret)
+db_try$TARGET<-as.factor(db_try$TARGET)
+newdata1<-ovun.sample(TARGET~.,data = db_try,method = "under")$data
+trainIndex_1 <- createDataPartition(newdata1$OCCUPATION_TYPE, p = .7, list = FALSE, times = 1)
+db_train_1 <- newdata1[ trainIndex_1,]
+db_test_1<-newdata1[-trainIndex_1,]
+```
+
+##4.2 Model
+
+In order to find the model that fits the best, I want to try different kinds of model because it can give me more space to choose.
+
+###4.2.1 logistic model:m1
+
+Why I choose this model: 
+- The reponsive variable in my data is TARGET which only contains 0 an 1. So this kind of data reminds me of the logistic model, and it meets my need that I want to predict the probability.
+```{r}
+m1<-glm(factor(TARGET)~DAYS_ID_PUBLISH+YEARS_BEGINEXPLUATATION_MODE+
+          COMMONAREA_MODE+FLOORSMAX_MODE+LIVINGAPARTMENTS_MODE+
+          AMT_INCOME_TOTAL+EXT_SOURCE_1+EXT_SOURCE_2+EXT_SOURCE_3+
+          AMT_CREDIT+AMT_GOODS_PRICE+factor(FLAG_OWN_CAR)+
+          factor(OCCUPATION_TYPE)+REG_CITY_NOT_LIVE_CITY,
+          data = db_train_1,family=binomial("logit"))
+```
+
+
+###4.2.2 Multilevel Logistic Model
+```{r}
+m2<-lme4::glmer(factor(TARGET)~   
+                FLAG_OWN_CAR+(1|OCCUPATION_TYPE)+
+                 EXT_SOURCE_2+EXT_SOURCE_3+EXT_SOURCE_1+
+                  poly(AMT_CREDIT,3)+poly(AMT_GOODS_PRICE,3)+ 
+                  FLOORSMAX_MODE+LIVINGAPARTMENTS_MODE,
+                data = db_train_1,
+                family = binomial("logit"))
+
+```
+
+
+
+
+###4.3 Interpretation
+
+####4.3.1 Interpretation Logistic Model
+```{r}
+summary(m1)
+```
+The output above shows the estimate of the regression beta coefficients and their significance levels, and we can find that most of our coefficients are statistically significant.
+
+An important concept to understand, for interpreting the logistic beta coefficients, is the odds ratio. An odds ratio measures the association between a predictor variable (x) and the outcome variable (y). It represents the ratio of the odds that an event will occur (event = 1) given the presence of the predictor x (x = 1), compared to the odds of the event occurring in the absence of that predictor (x = 0).
+
+For a given predictor (say x1), the associated beta coefficient (b1) in the logistic regression function corresponds to the log of the odds ratio for that predictor.
+
+If the odds ratio is 2, then the odds that the event occurs (event = 1) are two times higher when the predictor x is present (x = 1) versus x is absent (x = 0).
+
+When coefficient estimate of the variable is positive, it means that an increase in this variable is associated with increase in the probability of default. However when the coefficient for the variable negative, it means that an increase in this variable will be associated with a decreased probability of being default.
+
+In this model,the intercept means that, with all of variables becoming 0, the odds of default is -9.When one variable change one unit with other variables staying the same, the odd of default will increase the amount of certain coefficients.
+
+Deviance is a measure of goodness of fit of a generalized linear model. Or rather, it’s a measure of badness of fit–higher numbers indicate worse fit.
+
+In our model, the deviance is really big which means the fittness of my model is not good. And the residual deviance decreases with the freedom decreases which means the independent variables in our model can make some sense.
+
+ACI is the way to compare the model, and we tend to choose the model with small ACI.
+###4.3.2 Multilevel logistic regression
+```{r,warning=FALSE}
+summary(m2)
+```
+
+Firstly, the display show the estimate of average intercept, coefficients and their standard errors. The interpretions of these are similar to the logistic regreesion that we discussed above. 
+The intercept means the average odd of default with all of variables becoming 0. And the coefficient means that one unit change of one variable with other variable staying the same will cause the amount of certain coefficient change of odd of default.
+And we can see that coefficients are almost statistically siginificant.
+
+
+##4.4 Model check
+The main methods I used to check my model is confusion matrix, ROC and auc.
+-Confusion Matrix. A confusion matrix is a table that is often used to describe the performance of a classification model (or "classifier") on a set of test data for which the true values are known. The confusion matrix itself is relatively simple to understand, but the related terminology can be confusing..
+-Accuracy. Because my reponsive variable is binarary, and my dataset is biased, there is no reason for me to use accuracy to judge my model.
+-ROC. ROC curve is useful to check model fittness. And it can give use the most suitable thres to classify 0 and 1.
+-AUC. The bigger the better
+
+###4.4.1 Logistic model
+
+####4.4.1.1 confusionMatrix
+```{r,echo=FALSE}
+m3.predict <- predict(m1, db_test_1,type="response")
+m3.predict <- ifelse(m3.predict > 0.5,1,0)
+head(m3.predict)
+m3.predict <- as.factor(m3.predict)
+compare <- data.frame(obs = db_test_1$TARGET, pred = m3.predict)
+confusionMatrix(m3.predict, db_test_1$TARGET)
+```
+From the confusion matrix, we can find that our model does a great job. It can classify the good and bad clients fairly accuracy. The true positve rate is 69%,true negative rate is 66%.The model can classify most of the clients.
+
+####4.4.1.2 ROC and AUC
+```{r,echo=FALSE}
+library(pROC)
+rocCurve <- roc(response = db_test_1$TARGET, predictor = as.numeric(m3.predict), levels = rev(levels(db_test_1$TARGET)))
+plot(rocCurve, legacy.axes = TRUE,print.auc=TRUE, auc.polygon=TRUE, 
+     grid=c(0.1, 0.2),grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+
+```
+
+The AUC is 0.675 which is greater than 0.5, and it means our model have some classification abilities. Besides, the shape of ROC graph implies this model can do some predictions.
+
+####4.4.1.3 Binned residual plot
+```{r,echo=FALSE}
+arm::binnedplot(fitted(m1),residuals(m1,type="response"))
+```
+
+And we can see the binned residual plot is good because the residuals are almost inside the two lines. And these residuals are evenly distributed.
+
+####4.4.1.4 CoefPlot
+```{r,echo=FALSE,warning=FALSE}
+coefplot.glm(m1)
+```
+
+###4.4.2 Multilevel logistic regression model
+
+####4.4.2.1 ICC
+```{r,echo=FALSE,warning=FALSE}
+ICC.Model<-function(m2) {
+  tau.Null<-as.numeric(lapply(summary(m2)$varcor, diag))
+  sigma.Null <- as.numeric(attr(summary(m2)$varcor, "sc")^2)
+  ICC.Null <- tau.Null/(tau.Null+sigma.Null)
+  return(ICC.Null)
+}
+
+ICC.Model(m2)
+```
+ICC of my model is 0.06 which is greater than 0, and it means the use of multilevel logistic model can make some sense.
+
+####4.4.2.2 ConfusionMatrix
+```{r,echo=FALSE}
+db_test_1$OCCUPATION_TYPE<-as.factor(db_test_1$OCCUPATION_TYPE)
+m4.predict <- predict(m2, db_test_1,type="response")
+m3.predict <- ifelse(m4.predict > 0.5,1,0)
+head(m3.predict)
+m3.predict <- as.factor(m3.predict)
+compare <- data.frame(obs = db_test_1$TARGET, pred = m3.predict)
+caret::confusionMatrix(m3.predict, db_test_1$TARGET)
+```
+From the confusion matrix,we can find that our model can do good job on classifications. 
+The true positve rate is 67%,true negative rate is 67%. The prediction performance of multilevel logistic regression model is worse than logistic model.
+
+
+####4.4.2.3 ROC and AUC
+```{r,echo=FALSE}
+library(pROC)
+rocCurve <- roc(response = db_test_1$TARGET, predictor = as.numeric(m3.predict), levels = rev(levels(db_test_1$TARGET)))
+plot(rocCurve, legacy.axes = TRUE,print.auc=TRUE, auc.polygon=TRUE, 
+     grid=c(0.1, 0.2),grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+The AUC is 0.676 which is greater than 0.5, and it means our model have some classification abilities. Besides, the shape of ROC graph implies this model can do some predictions.
+
+
+####4.4.2.4 Binned residual plot
+```{r,echo=FALSE}
+arm::binnedplot(fitted(m2),residuals(m2,type="response"))
+```
+And we can see the binned residual plot is good because the residuals are almost inside the two lines. And these residuals are evenly distributed.
+
+####4.4.2.5 CoefPlot
+```{r,warning=FALSE}
+coefplot.rxLogit(m2)
+```
+
+We can find that the coefficient plot informs us the model does not fit well.
+
+##4.5 Current Conclusion
+
+When we look back these two models, it seems like that there are only little differences exsisting between logistic and multilevel logistic models. The logistic regression model has much higher prediction accuracy than multilevel logistic model. However, the ICC model tells me that the multilevel logistic model can make some sense, and the AUC of multilevel logistic model is larger than logistic model. 
+So I think may be m2: multilevel logistic regression model can be a better model than m1: logistic regression model.
+
+
+#5 Discussion
+
+##5.1 Implication
+
+This project gives me lots of inspirations. 
+Firstly, EDA part is essential. When we do the EDA, we can have clear understandings of our data. Besides, it can help us to know how to clean our data and benefit our features extractions.
+Secondly, it teaches me how to deal with unbalanced data. Biased data can bring great difficulties to fit model and affect the accuracy of our model. So if we find our data is biased during the process of EDA, it is crucial to resampling.
+Thirdly, the preprocess of big data triggers my passion for studying the related subjects in next semster. And the big data requires us to handle carefully.
+Finally, the enthusiasm is critical, and we should do our best to use all study sources to improve us.
+
+##5.2 Limitations
+
+There is no doubt that the project has limitations.
+Firstly the processing of missing data may be not the proper way.
+Secondly, there are still many variables in raw data not being used. Because the limitations of the computer, the variables and the observations are not fully utilized which can have influences on the accuracy of a model.
+Thirdly, I do not take non-linear regression model into considerations. I think that the linear regression model may be the best way to solve this problem.
+
+##5.3 Future Direction
+
+In the future, I will have a try non-linear regression model such as KNN to interpret this data. 
+And I will try another way to fill the missing data. To enhance the accuracy of my model, I plan to introduce more variables and observations into the model fitting process. 
+Maybe I can use python next semester to remodel this data.
+
+
+#6. Referrence
+
+Firstly, thank Professor Masanao for assistance with model fitting and the great lectures in this semester.Your feedback benifits me a lot.
+
+Besides,I would also like to show my gratitude to so many outstanding data scientists for sharing their pearls of wisdom. Their kindness really 
+
+At last, I should restate that data used in this project comes from kaggle provided by HomeCredit Company. I will only use this data for nonprofit research such as final project.
+
+
